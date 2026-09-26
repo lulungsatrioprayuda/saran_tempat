@@ -1,5 +1,11 @@
 const puppeteer = require('puppeteer');
-const { extractCoordinates, parseRating, parseReviewsCount, cleanText } = require('../utils/parser');
+const {
+  extractCoordinates,
+  parseRating,
+  parseReviewsCount,
+  extractPhoneNumber,
+  cleanText,
+} = require('../utils/parser');
 
 /**
  * Delay helper
@@ -13,9 +19,10 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
  * @param {string} options.query - Place or business to search (e.g., "coffee shop")
  * @param {string} [options.location] - City or area (e.g., "Jakarta Selatan")
  * @param {number} [options.limit=20] - Maximum number of results to fetch
+ * @param {number} [options.hasPhone=0] - If 1, only return places that have a phone number
  * @returns {Promise<Array<Object>>}
  */
-async function scrapeGoogleMaps({ query, location, limit = 20 }) {
+async function scrapeGoogleMaps({ query, location, limit = 20, hasPhone = 0 }) {
   const searchQuery = location ? `${query} ${location}` : query;
   const encodedQuery = encodeURIComponent(searchQuery);
   const targetUrl = `https://www.google.com/maps/search/${encodedQuery}?hl=en`;
@@ -56,7 +63,7 @@ async function scrapeGoogleMaps({ query, location, limit = 20 }) {
       }
     });
 
-    console.log(`[Scraper] Navigating to: ${targetUrl}`);
+    console.log(`[Scraper] Navigating to: ${targetUrl} (hasPhone filter: ${hasPhone})`);
     await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
 
     // Handle Google Consent / Cookie dialog if present
@@ -76,7 +83,14 @@ async function scrapeGoogleMaps({ query, location, limit = 20 }) {
     if (currentUrl.includes('/maps/place/')) {
       console.log('[Scraper] Single place detected directly');
       const singlePlace = await extractSinglePlace(page, currentUrl);
-      return singlePlace ? [singlePlace] : [];
+      if (singlePlace) {
+        if (hasPhone === 1 && !singlePlace.phone) {
+          console.log('[Scraper] Single place has no phone number, returning empty as per filter.');
+          return [];
+        }
+        return [singlePlace];
+      }
+      return [];
     }
 
     // Wait for the feed container (Google Maps search results)
@@ -84,39 +98,39 @@ async function scrapeGoogleMaps({ query, location, limit = 20 }) {
     try {
       await page.waitForSelector(feedSelector, { timeout: 12000 });
     } catch (_) {
-      // If no feed is found, check if a single place or no results appeared
       const heading = await page.$('h1');
       if (heading) {
         const singlePlace = await extractSinglePlace(page, page.url());
-        if (singlePlace) return [singlePlace];
+        if (singlePlace) {
+          if (hasPhone === 1 && !singlePlace.phone) return [];
+          return [singlePlace];
+        }
       }
       console.log('[Scraper] No feed found or no results returned.');
       return [];
     }
 
     // Auto-scroll the feed to load desired number of items
-    console.log(`[Scraper] Scrolling feed to reach limit: ${limit}`);
-    await autoScrollFeed(page, feedSelector, limit);
+    console.log(`[Scraper] Scrolling feed (target limit: ${limit}, requirePhone: ${hasPhone})`);
+    await autoScrollFeed(page, feedSelector, limit, hasPhone);
 
     // Extract items from feed
     const rawItems = await page.evaluate(() => {
       const feed = document.querySelector('div[role="feed"]');
       if (!feed) return [];
 
-      // Place links in Google Maps feed have class hfpxzc or href with /maps/place/
       const links = feed.querySelectorAll('a.hfpxzc, a[href*="/maps/place/"]');
       const results = [];
 
       links.forEach((link) => {
         const placeUrl = link.getAttribute('href') || '';
         const name = link.getAttribute('aria-label') || link.innerText || '';
-
-        // The card container holding text info is typically the closest ancestor card
         const card = link.closest('div[jsaction]') || link.parentElement;
 
         let ratingText = '';
         let reviewsText = '';
         let fullText = '';
+        let website = '';
 
         if (card) {
           fullText = card.innerText || '';
@@ -133,7 +147,7 @@ async function scrapeGoogleMaps({ query, location, limit = 20 }) {
             reviewsText = reviewElement.getAttribute('aria-label') || reviewElement.innerText || '';
           }
 
-          // If not found yet, search for parenthesized review badge: (1,234) or (1.2K)
+          // Search for parenthesized review badge: (1,234) or (1.2K)
           if (!reviewsText) {
             const allSpans = card.querySelectorAll('span');
             for (const span of allSpans) {
@@ -146,12 +160,18 @@ async function scrapeGoogleMaps({ query, location, limit = 20 }) {
             }
           }
 
-          // If still not found, check rating parent if it contains review keywords
+          // Check rating parent if it contains review keywords
           if (!reviewsText && ratingElement && ratingElement.parentElement) {
             const parentTxt = ratingElement.parentElement.innerText || '';
             if (/\([\d.,kK]+\)|reviews?|ulasan/i.test(parentTxt)) {
               reviewsText = parentTxt;
             }
+          }
+
+          // Extract website link if available in card
+          const webEl = card.querySelector('a[data-value*="Website" i], a[aria-label*="website" i]');
+          if (webEl) {
+            website = webEl.getAttribute('href') || '';
           }
         }
 
@@ -161,6 +181,7 @@ async function scrapeGoogleMaps({ query, location, limit = 20 }) {
           ratingText,
           reviewsText,
           fullText,
+          website,
         });
       });
 
@@ -180,6 +201,11 @@ async function scrapeGoogleMaps({ query, location, limit = 20 }) {
 
       const coords = extractCoordinates(item.placeUrl);
       const { category, address, phone, priceLevel } = parseCardFullText(item.fullText, item.name);
+
+      // Filter: if hasPhone is 1, place MUST have a phone number
+      if (hasPhone === 1 && !phone) {
+        continue;
+      }
 
       let rating = parseRating(item.ratingText);
       let reviewsCount = parseReviewsCount(item.reviewsText) || parseReviewsCount(item.ratingText);
@@ -205,7 +231,7 @@ async function scrapeGoogleMaps({ query, location, limit = 20 }) {
         reviewsCount: reviewsCount || 0,
         address: address || '',
         phone: phone || '',
-        website: '',
+        website: item.website || '',
         latitude: coords.latitude,
         longitude: coords.longitude,
         placeUrl: item.placeUrl,
@@ -218,7 +244,7 @@ async function scrapeGoogleMaps({ query, location, limit = 20 }) {
       }
     }
 
-    console.log(`[Scraper] Successfully parsed ${places.length} places`);
+    console.log(`[Scraper] Successfully parsed ${places.length} places (hasPhone filter: ${hasPhone})`);
     return places;
   } finally {
     if (browser) {
@@ -234,22 +260,37 @@ async function scrapeGoogleMaps({ query, location, limit = 20 }) {
 /**
  * Scroll feed element until target count is reached or no more items load
  */
-async function autoScrollFeed(page, feedSelector, targetCount) {
+async function autoScrollFeed(page, feedSelector, targetCount, hasPhone = 0) {
   let prevCount = 0;
   let sameCountRepeats = 0;
-  const maxRepeats = 5;
+  const maxRepeats = 6;
 
   while (sameCountRepeats < maxRepeats) {
-    const currentCount = await page.evaluate((selector) => {
+    const counts = await page.evaluate((selector) => {
       const feed = document.querySelector(selector);
-      if (!feed) return 0;
-      return feed.querySelectorAll('a.hfpxzc, a[href*="/maps/place/"]').length;
+      if (!feed) return { total: 0, withPhone: 0 };
+      const links = feed.querySelectorAll('a.hfpxzc, a[href*="/maps/place/"]');
+      let withPhoneCount = 0;
+
+      links.forEach((l) => {
+        const card = l.closest('div[jsaction]') || l.parentElement;
+        const text = card ? card.innerText : '';
+        if (/(?:(?:\+?\d{1,4}[-.\s]?)?\(?\d{2,4}\)?[-.\s]?\d{3,5}[-.\s]?\d{3,5})/.test(text)) {
+          withPhoneCount++;
+        }
+      });
+
+      return { total: links.length, withPhone: withPhoneCount };
     }, feedSelector);
 
-    if (currentCount >= targetCount) {
+    // If hasPhone is required, check if we gathered enough places with phone
+    if (hasPhone === 1 && counts.withPhone >= targetCount) {
+      break;
+    } else if (hasPhone !== 1 && counts.total >= targetCount) {
       break;
     }
 
+    const currentCount = hasPhone === 1 ? counts.withPhone : counts.total;
     if (currentCount === prevCount) {
       sameCountRepeats++;
     } else {
@@ -324,6 +365,9 @@ async function extractSinglePlace(page, url) {
 function parseCardFullText(fullText, placeName) {
   if (!fullText) return { category: '', address: '', phone: '', priceLevel: '' };
 
+  // First, extract phone number reliably
+  const phone = extractPhoneNumber(fullText);
+
   const lines = fullText
     .split('\n')
     .map((l) => l.trim())
@@ -331,7 +375,6 @@ function parseCardFullText(fullText, placeName) {
 
   let category = '';
   let address = '';
-  let phone = '';
   let priceLevel = '';
 
   for (const line of lines) {
@@ -347,20 +390,21 @@ function parseCardFullText(fullText, placeName) {
       for (const part of parts) {
         if (!category && !part.match(/\d/) && part.length < 35 && !part.toLowerCase().includes('open') && !part.toLowerCase().includes('close')) {
           category = part;
-        } else if (part.match(/^[+\d\s\-()]{7,}$/)) {
-          phone = part;
         } else if (part.length > 10 && !part.toLowerCase().includes('open') && !part.toLowerCase().includes('close') && !address) {
-          address = part;
+          // If this part isn't the phone number, it's likely an address
+          if (part !== phone) {
+            address = part;
+          }
         }
       }
     } else {
       // Standalone line
-      if (line.match(/^[+\d\s\-()]{7,}$/) && !phone) {
-        phone = line;
-      } else if (!category && !line.match(/\d/) && line.length < 35 && !line.toLowerCase().includes('open') && !line.toLowerCase().includes('close')) {
+      if (!category && !line.match(/\d/) && line.length < 35 && !line.toLowerCase().includes('open') && !line.toLowerCase().includes('close')) {
         category = line;
-      } else if (line.length > 15 && !address && !line.toLowerCase().includes('open') && !line.toLowerCase().includes('close')) {
-        address = line;
+      } else if (line.length > 12 && !address && !line.toLowerCase().includes('open') && !line.toLowerCase().includes('close')) {
+        if (line !== phone) {
+          address = line;
+        }
       }
     }
   }
