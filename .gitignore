@@ -1,0 +1,24 @@
+# Dependencies
+node_modules/
+package-lock.json
+PROJECT_PLAN.md
+
+# Environment variables
+.env
+.env.local
+
+# Logs
+logs
+*.log
+npm-debug.log*
+
+# OS / Editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Temp / Scraped exports
+scratch/
+temp/
+*.xlsx
