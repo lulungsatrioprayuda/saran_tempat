@@ -5,7 +5,7 @@ const { scrapeGoogleMaps } = require('../services/scraperService');
 
 /**
  * POST /api/scrape
- * Body: { query, location, limit }
+ * Body: { query, location, limit, hasPhone }
  */
 router.post('/', async (req, res, next) => {
   try {
@@ -17,17 +17,20 @@ router.post('/', async (req, res, next) => {
       });
     }
 
-    const { query, location, limit } = validation.data;
+    const { query, location, limit, hasPhone } = validation.data;
 
-    console.log(`[API /api/scrape] Received request: query="${query}", location="${location}", limit=${limit}`);
+    console.log(
+      `[API /api/scrape] Received request: query="${query}", location="${location}", limit=${limit}, hasPhone=${hasPhone}`
+    );
 
-    const places = await scrapeGoogleMaps({ query, location, limit });
+    const places = await scrapeGoogleMaps({ query, location, limit, hasPhone });
 
     return res.status(200).json({
       success: true,
       count: places.length,
       query,
       location: location || null,
+      hasPhone,
       data: places,
     });
   } catch (error) {

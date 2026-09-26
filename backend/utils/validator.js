@@ -3,7 +3,7 @@
  */
 function validateScrapeInput(body) {
   const errors = [];
-  let { query, location, limit } = body || {};
+  let { query, location, limit, hasPhone, phone, phoneNumber, hasPhoneNumber } = body || {};
 
   if (!query || typeof query !== 'string' || !query.trim()) {
     errors.push('Query is required and must be a non-empty string.');
@@ -21,8 +21,12 @@ function validateScrapeInput(body) {
   if (isNaN(parsedLimit) || parsedLimit < 1) {
     parsedLimit = 20; // default
   } else if (parsedLimit > 100) {
-    parsedLimit = 100; // max threshold to prevent abuse/timeouts
+    parsedLimit = 100; // max threshold
   }
+
+  // Check optional phone filter: 1, '1', or true
+  const rawPhoneVal = hasPhone ?? phone ?? phoneNumber ?? hasPhoneNumber;
+  const requirePhone = (rawPhoneVal === 1 || rawPhoneVal === '1' || rawPhoneVal === true) ? 1 : 0;
 
   return {
     isValid: errors.length === 0,
@@ -31,6 +35,7 @@ function validateScrapeInput(body) {
       query,
       location,
       limit: parsedLimit,
+      hasPhone: requirePhone,
     },
   };
 }

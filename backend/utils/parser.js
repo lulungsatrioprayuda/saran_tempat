@@ -102,9 +102,9 @@ function parseReviewsCount(reviewsStr) {
   if (/^[\d.,]+$/.test(clean)) {
     const asFloat = parseFloat(clean.replace(',', '.'));
     if (!clean.includes(',') && !clean.includes('.') && asFloat <= 5) {
-      // Could be a very small integer or ambiguous, but let's check
+      // Could be small integer or ambiguous
     } else if (asFloat <= 5.0 && (clean.includes('.') || clean.includes(',')) && !clean.includes('00')) {
-      // This is a rating (e.g., 4.5, 4.8), not a review count
+      // Rating, not review count
       return 0;
     }
     const rawDigits = clean.replace(/[.,]/g, '');
@@ -112,12 +112,39 @@ function parseReviewsCount(reviewsStr) {
     return isNaN(val) ? 0 : val;
   }
 
-  // If the string only mentions "stars" and has no other numbers, return 0 (not reviews)
+  // If the string only mentions "stars" and has no other numbers, return 0
   if (clean.toLowerCase().includes('star') && !clean.toLowerCase().includes('review')) {
     return 0;
   }
 
   return 0;
+}
+
+/**
+ * Extract phone number from text lines
+ * Matches formats:
+ * - 0812-3456-7890 / 08119224450
+ * - (021) 22443648 / (022) 1234567
+ * - +62 21 12345678 / +62 812-3456-7890
+ * - +1 234-567-8901
+ */
+function extractPhoneNumber(text) {
+  if (!text || typeof text !== 'string') return '';
+
+  const phoneRegex = /(?:(?:\+?\d{1,4}[-.\s]?)?\(?\d{2,4}\)?[-.\s]?\d{3,5}[-.\s]?\d{3,5})/g;
+  const matches = text.match(phoneRegex);
+  if (!matches) return '';
+
+  for (const match of matches) {
+    const cleaned = match.trim();
+    const digits = (cleaned.match(/\d/g) || []).length;
+    // Standard phone numbers have between 8 and 16 digits and start with +, (, or 0
+    if (digits >= 8 && digits <= 16 && (cleaned.startsWith('+') || cleaned.startsWith('(') || cleaned.startsWith('0'))) {
+      return cleaned;
+    }
+  }
+
+  return '';
 }
 
 /**
@@ -135,5 +162,6 @@ module.exports = {
   extractCoordinates,
   parseRating,
   parseReviewsCount,
+  extractPhoneNumber,
   cleanText,
 };
