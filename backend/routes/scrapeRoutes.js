@@ -1,5 +1,7 @@
 const express = require('express');
 const router = express.Router();
+const { validateScrapeInput } = require('../utils/validator');
+const { scrapeGoogleMaps } = require('../services/scraperService');
 
 /**
  * POST /api/scrape
@@ -7,26 +9,29 @@ const router = express.Router();
  */
 router.post('/', async (req, res, next) => {
   try {
-    const { query, location, limit = 20 } = req.body;
-
-    if (!query) {
+    const validation = validateScrapeInput(req.body);
+    if (!validation.isValid) {
       return res.status(400).json({
         success: false,
-        error: 'Search query is required',
+        errors: validation.errors,
       });
     }
 
-    // Placeholder response for Phase 1
+    const { query, location, limit } = validation.data;
+
+    console.log(`[API /api/scrape] Received request: query="${query}", location="${location}", limit=${limit}`);
+
+    const places = await scrapeGoogleMaps({ query, location, limit });
+
     return res.status(200).json({
       success: true,
-      message: 'Scrape route ready (Phase 1)',
+      count: places.length,
       query,
-      location: location || 'Not specified',
-      limit: Number(limit),
-      count: 0,
-      data: [],
+      location: location || null,
+      data: places,
     });
   } catch (error) {
+    console.error('[API /api/scrape] Error during scraping:', error);
     next(error);
   }
 });
